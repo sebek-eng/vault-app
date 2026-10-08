@@ -40,6 +40,8 @@ textarea{width:100%;min-height:70vh;font:15px/1.5 ui-monospace,Menlo,Consolas,mo
 .md li.done>span{color:var(--mut);text-decoration:line-through}
 .md mark{background:#fde04755;color:inherit;padding:0 2px}.md .tag{color:var(--acc);background:var(--card);border-radius:8px;padding:0 6px;font-size:.9em}
 .callout{background:var(--card);border-left:4px solid var(--acc);border-radius:8px;padding:6px 12px;margin:.7em 0}.callout b{display:block;text-transform:capitalize}
+.mathd{overflow-x:auto;overflow-y:hidden;margin:.6em 0;text-align:center}.mathd .katex-display{margin:0}
+.fail{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--mut)}
 .fm{color:var(--mut);font-size:.85rem;background:var(--card);border-radius:8px;padding:6px 10px;margin-bottom:8px}
 .crumb{color:var(--mut);font-size:.85rem;margin-bottom:4px}
 .empty{color:var(--mut);text-align:center;padding:30px}
@@ -242,6 +244,8 @@ function inline(s, from) {
   const stash = [];
   const keep = h => '\u0000' + (stash.push(h) - 1) + '\u0000';
   s = s.replace(/`([^`]+)`/g, (_, c) => keep('<code>' + esc(c) + '</code>'));
+  s = s.replace(/(^|[^\\$])\$\$(.+?)\$\$/g, (_, pre, t) => pre + keep(`<span class="math" data-d="1" data-tex="${esc(t.trim())}"></span>`));
+  s = s.replace(/(^|[^\\$])\$(?!\s)([^$\n]*?[^\s\\$\n])\$(?!\d)/g, (_, pre, t) => pre + keep(`<span class="math" data-tex="${esc(t)}"></span>`));
   s = esc(s);
   s = s.replace(/!\[\[([^\]]+)\]\]/g, (_, n) => {
     const t = n.split('|')[0], p = resolve(t, from);
@@ -290,6 +294,15 @@ function render(text, from) {
       while (i < L.length && !L[i].startsWith(m[1])) buf.push(L[i++]);
       i++; out += '<pre><code>' + esc(buf.join('\n')) + '</code></pre>'; continue;
     }
+    if (/^\s*\$\$/.test(ln)) {
+      // Formelblock $$ … $$ (nur wenn es ein schließendes $$ gibt)
+      const first = ln.replace(/^\s*\$\$/, ''); let end = -1, j = i;
+      if (first.includes('$$')) end = i; else for (j = i + 1; j < L.length; j++) if (L[j].includes('$$')) { end = j; break; }
+      if (end >= 0) {
+        const parts = end === i ? [first.slice(0, first.indexOf('$$'))] : [first, ...L.slice(i + 1, end), L[end].slice(0, L[end].indexOf('$$'))];
+        out += `<div class="mathd" data-d="1" data-tex="${esc(parts.join('\n').trim())}"></div>`; i = end + 1; continue;
+      }
+    }
     if ((m = ln.match(/^(#{1,6})\s+(.*?)\s*#*$/))) { out += `<h${m[1].length} id="h-${esc(m[2].toLowerCase())}">${inline(m[2], from)}</h${m[1].length}>`; i++; continue; }
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(ln)) { out += '<hr>'; i++; continue; }
     if (/^>/.test(ln)) {
@@ -325,10 +338,30 @@ function render(text, from) {
       continue;
     }
     const buf = [];
-    while (i < L.length && !/^\s*$/.test(L[i]) && !/^(#{1,6}\s|>|```|~~~)/.test(L[i]) && !listRe.test(L[i])) buf.push(L[i++]);
+    while (i < L.length && !/^\s*$/.test(L[i]) && !/^(#{1,6}\s|>|```|~~~|\s*\$\$)/.test(L[i]) && !listRe.test(L[i])) buf.push(L[i++]);
     out += '<p>' + inline(buf.join('\n'), from).replace(/\n/g, '<br>') + '</p>';
   }
   return out;
+}
+
+/* ---------- Formeln (KaTeX, wird bei Bedarf geladen und vom Service Worker offline gecacht) ---------- */
+const KV = 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/';
+let katexP;
+function loadKatex() {
+  return katexP || (katexP = new Promise((res, rej) => {
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = KV + 'katex.min.css'; document.head.appendChild(l);
+    const s = document.createElement('script'); s.src = KV + 'katex.min.js';
+    s.onload = () => res(window.katex); s.onerror = () => { katexP = null; rej(new Error('katex')); };
+    document.head.appendChild(s);
+  }));
+}
+const texFail = el => { el.classList.add('fail'); el.textContent = el.dataset.tex; };
+async function typeset(root) {
+  const els = root.querySelectorAll('[data-tex]'); if (!els.length) return;
+  try {
+    const k = await loadKatex();
+    els.forEach(el => { try { k.render(el.dataset.tex, el, { displayMode: !!el.dataset.d, throwOnError: false }); } catch { texFail(el); } });
+  } catch { els.forEach(texFail); }
 }
 
 /* ---------- Views ---------- */
@@ -392,6 +425,7 @@ function show(hash) {
   setHeader(noext(cur), { back: true, edit: true });
   $('#edit').textContent = '✎';
   main.innerHTML = `<div class="crumb">${esc(dirOf(cur))}</div><div class="md">${render(curText, cur)}</div>`;
+  typeset(main);
   main.querySelectorAll('img[data-raw]').forEach(async i => { try { const u = await S.img(i.dataset.raw); if (u) i.src = u; } catch {} });
   if (hash) { const el = document.getElementById('h-' + hash.toLowerCase()); if (el) el.scrollIntoView(); } else scrollTo(0, 0);
 }
