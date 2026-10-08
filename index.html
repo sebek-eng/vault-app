@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#7c3aed">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Vault</title>
+<style>
+:root{--bg:#fff;--fg:#1f2328;--mut:#6b7280;--line:#e5e7eb;--card:#f6f7f9;--acc:#7c3aed;--accfg:#fff;--code:#f1f2f4}
+@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#e6e6e8;--mut:#9a9aa3;--line:#2c2c31;--card:#1f1f23;--acc:#a78bfa;--accfg:#161618;--code:#242429}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;display:flex;gap:6px;align-items:center;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top));background:var(--bg);border-bottom:1px solid var(--line)}
+header h1{flex:1;font-size:1.05rem;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-height:40px}
+button.pri{background:var(--acc);color:var(--accfg);border-color:var(--acc)}
+button:active{opacity:.7}
+main{padding:12px 14px calc(80px + env(safe-area-inset-bottom));max-width:820px;margin:0 auto}
+input[type=search],input.t{width:100%;font:inherit;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+.row{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:10px 4px;min-height:48px}
+.row small{display:block;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder{font-weight:600;color:var(--acc);padding:12px 4px 4px;cursor:pointer;user-select:none}
+.sub{margin-left:12px;border-left:2px solid var(--line);padding-left:6px}
+textarea{width:100%;min-height:70vh;font:15px/1.5 ui-monospace,Menlo,Consolas,monospace;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);resize:vertical}
+#fab{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:50%;font-size:28px;padding:0;box-shadow:0 4px 14px #0004}
+.md h1,.md h2,.md h3,.md h4{line-height:1.25;margin:1.2em 0 .4em}.md h1{font-size:1.6rem}.md h2{font-size:1.35rem}.md h3{font-size:1.15rem}
+.md p{margin:.55em 0}.md a{color:var(--acc)}.md a.wl{text-decoration:none;border-bottom:1px dashed var(--acc)}.md a.missing{color:var(--mut)}
+.md img{max-width:100%;border-radius:8px}.md hr{border:0;border-top:1px solid var(--line);margin:1.2em 0}
+.md code{background:var(--code);padding:1px 5px;border-radius:5px;font-size:.9em}
+.md pre{background:var(--code);padding:10px;border-radius:10px;overflow:auto}.md pre code{background:none;padding:0}
+.md blockquote{margin:.6em 0;padding:.1em 12px;border-left:3px solid var(--acc);color:var(--mut)}
+.md table{border-collapse:collapse;display:block;overflow:auto;margin:.6em 0}.md th,.md td{border:1px solid var(--line);padding:6px 10px}.md th{background:var(--card)}
+.md ul,.md ol{padding-left:1.4em;margin:.3em 0}.md li.task{list-style:none;margin-left:-1.2em}.md li.task input{width:20px;height:20px;vertical-align:-4px;margin-right:8px}
+.md li.done>span{color:var(--mut);text-decoration:line-through}
+.md mark{background:#fde04755;color:inherit;padding:0 2px}.md .tag{color:var(--acc);background:var(--card);border-radius:8px;padding:0 6px;font-size:.9em}
+.callout{background:var(--card);border-left:4px solid var(--acc);border-radius:8px;padding:6px 12px;margin:.7em 0}.callout b{display:block;text-transform:capitalize}
+.fm{color:var(--mut);font-size:.85rem;background:var(--card);border-radius:8px;padding:6px 10px;margin-bottom:8px}
+.crumb{color:var(--mut);font-size:.85rem;margin-bottom:4px}
+.empty{color:var(--mut);text-align:center;padding:30px}
+</style>
+</head>
+<body>
+<header>
+  <button id="back" hidden>←</button>
+  <h1 id="title">Vault</h1>
+  <button id="edit" hidden>✎</button>
+  <button id="save" class="pri" hidden>Speichern</button>
+  <button id="refresh" title="Neu laden">⟳</button>
+</header>
+<main id="main"></main>
+<button id="fab" class="pri" title="Neue Notiz">+</button>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const main = $('#main'), titleEl = $('#title');
+let files = [], byName = new Map(), cur = null, curText = '', curM = 0, editing = false, dirty = false;
+const open_ = new Set(JSON.parse(sessionStorage.getItem('open') || '[]'));
+
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const base = p => p.split('/').pop();
+const noext = p => base(p).replace(/\.[^.]+$/, '');
+const dirOf = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+const isMd = p => /\.md$/i.test(p);
+const isImg = p => /\.(png|jpe?g|gif|svg|webp|bmp)$/i.test(p);
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp', bmp: 'image/bmp', pdf: 'application/pdf' };
+const mime = p => MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream';
+
+/* ---------- Speicher-Schicht: PC-Server (WLAN/Tailscale) oder GitHub (ohne PC) ---------- */
+const GH_MODE = location.hostname.endsWith('github.io') || new URLSearchParams(location.search).has('gh') || localStorage.getItem('mode') === 'gh';
+if (new URLSearchParams(location.search).has('gh')) localStorage.setItem('mode', 'gh');
+
+const idb = (() => {
+  let p;
+  const open = () => p || (p = new Promise((res, rej) => { const r = indexedDB.open('vault', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }));
+  const tx = (mode, f) => open().then(db => new Promise((res, rej) => { const t = db.transaction('kv', mode); const q = f(t.objectStore('kv')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); }));
+  return { get: k => tx('readonly', s => s.get(k)).catch(() => undefined), set: (k, v) => tx('readwrite', s => s.put(v, k)).catch(() => {}) };
+})();
+
+function srvStore() {
+  const call = async (url, opt) => {
+    const r = await fetch(url, opt);
+    if (r.status === 401) { document.body.innerHTML = '<p style="padding:2em">Nicht angemeldet. Am PC <b>/pair</b> öffnen und QR scannen.</p>'; throw new Error('auth'); }
+    return r;
+  };
+  const raw = p => '/raw?p=' + encodeURIComponent(p);
+  const post = (u, d) => call(u, { method: 'POST', body: JSON.stringify(d) });
+  return {
+    configured: () => true,
+    async list() {
+      try { const f = await (await call('/api/files')).json(); localStorage.setItem('files', JSON.stringify(f)); return f; }
+      catch (e) { if (e.message === 'auth') throw e; return JSON.parse(localStorage.getItem('files') || '[]'); }
+    },
+    async read(p) { const d = await (await call('/api/file?p=' + encodeURIComponent(p))).json(); return { text: d.text, m: d.m }; },
+    async write(p, text, m) {
+      const r = await post('/api/save', m == null ? { p, text } : { p, text, m });
+      if (r.status === 409) return { conflict: true };
+      if (!r.ok) throw new Error('Speichern fehlgeschlagen (' + r.status + ')');
+      return { ok: true, m: (await r.json()).m };
+    },
+    async create(p, text) {
+      const r = await post('/api/create', { p, text });
+      if (r.status === 409) return { exists: true };
+      if (!r.ok) throw new Error('Erstellen fehlgeschlagen (' + r.status + ')');
+      return { ok: true };
+    },
+    async search(q) { return (await call('/api/search?q=' + encodeURIComponent(q))).json(); },
+    async img(p) { return raw(p); },
+    async open(p) { window.open(raw(p), '_blank'); },
+    status: () => ''
+  };
+}
+
+function ghStore() {
+  let cfg = JSON.parse(localStorage.getItem('gh') || 'null'), map = new Map(), ov = {}, prefetch = Promise.resolve(), offline = false, cached = 0, total = 0;
+  const H = rawAccept => ({ Authorization: 'Bearer ' + cfg.t, Accept: rawAccept ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' });
+  const url = s => `https://api.github.com/repos/${cfg.o}/${cfg.r}/${s}`;
+  const enc = p => p.split('/').map(encodeURIComponent).join('/');
+  const b64 = s => { const b = new TextEncoder().encode(s); let r = ''; for (let i = 0; i < b.length; i += 0x8000) r += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(r); };
+  const authErr = status => Object.assign(new Error('auth'), { status });
+
+  async function blobText(sha) {
+    let t = await idb.get('txt:' + sha);
+    if (t !== undefined) return t;
+    const r = await fetch(url('git/blobs/' + sha), { headers: H(true) });
+    if (!r.ok) throw new Error('GitHub ' + r.status);
+    t = await r.text(); idb.set('txt:' + sha, t); return t;
+  }
+  async function blobBin(f) {
+    let b = await idb.get('bin:' + f.sha);
+    if (b) return b;
+    const r = await fetch(url('git/blobs/' + f.sha), { headers: H(true) });
+    if (!r.ok) throw new Error('GitHub ' + r.status);
+    b = new Blob([await r.arrayBuffer()], { type: mime(f.p) }); idb.set('bin:' + f.sha, b); return b;
+  }
+  const put = async (p, body) => fetch(url('contents/' + enc(p)), { method: 'PUT', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const touch = async (p, text, sha) => {
+    const f = map.get(p) || { p, s: text.length }; f.sha = sha; f.m = Math.floor(Date.now() / 1000); map.set(p, f);
+    ov[p] = f.m; idb.set('ov', ov); idb.set('txt:' + sha, text); return f;
+  };
+
+  return {
+    configured: () => !!cfg,
+    setConfig(c) { cfg = c; localStorage.setItem('gh', JSON.stringify(c)); },
+    clear() { localStorage.removeItem('gh'); cfg = null; },
+    async check(c) {
+      const r = await fetch(`https://api.github.com/repos/${c.o}/${c.r}`, { headers: { Authorization: 'Bearer ' + c.t, Accept: 'application/vnd.github+json' } });
+      if (r.status === 404 || r.status === 401 || r.status === 403) throw new Error('Repo nicht gefunden oder Token ohne Zugriff (' + r.status + ').');
+      if (!r.ok) throw new Error('GitHub-Fehler ' + r.status);
+      const d = await r.json();
+      if (!d.private) throw new Error('Dieses Repo ist ÖFFENTLICH. Bitte ein privates Repo verwenden – deine Notizen wären sonst für alle lesbar.');
+      return true;
+    },
+    async list() {
+      let tree; offline = false;
+      try {
+        const r = await fetch(url('git/trees/HEAD?recursive=1'), { headers: H() });
+        if (r.status === 401 || r.status === 403 || r.status === 404) throw authErr(r.status);
+        if (!r.ok) throw new Error('net');
+        tree = (await r.json()).tree; idb.set('tree', tree);
+      } catch (e) {
+        if (e.message === 'auth') throw e;
+        tree = await idb.get('tree'); if (!tree) throw e; offline = true;
+      }
+      let mt = {};
+      const me = tree.find(e => e.path === '.vault-mtimes.json');
+      if (me) { try { mt = JSON.parse(await blobText(me.sha)); } catch {} }
+      ov = (await idb.get('ov')) || {};
+      const files = tree.filter(e => e.type === 'blob' && !e.path.split('/').some(s => s.startsWith('.')))
+        .map(e => ({ p: e.path, sha: e.sha, s: e.size, m: Math.max(mt[e.path] || 0, ov[e.path] || 0) }));
+      map = new Map(files.map(f => [f.p, f]));
+      const md = files.filter(f => isMd(f.p)); total = md.length; cached = 0;
+      prefetch = (async () => {
+        const todo = [];
+        for (const f of md) { if ((await idb.get('txt:' + f.sha)) === undefined) todo.push(f); else cached++; }
+        let i = 0;
+        await Promise.all(Array.from({ length: 5 }, async () => { while (i < todo.length) { const f = todo[i++]; try { await blobText(f.sha); cached++; } catch {} } }));
+      })();
+      return files;
+    },
+    async read(p) { const f = map.get(p); if (!f) throw new Error('Nicht gefunden'); return { text: await blobText(f.sha), m: f.sha }; },
+    async write(p, text, m) {
+      let sha = m;
+      if (sha == null) { const r = await fetch(url('contents/' + enc(p)), { headers: H() }); if (r.ok) sha = (await r.json()).sha; }
+      const r = await put(p, { message: 'Handy: ' + p, content: b64(text), ...(sha ? { sha } : {}) });
+      if (r.status === 409 || r.status === 422) return { conflict: true };
+      if (!r.ok) throw new Error('GitHub ' + r.status + (r.status === 401 || r.status === 403 ? ' – Token braucht Schreibrecht (Contents: Read and write).' : ''));
+      const ns = (await r.json()).content.sha; await touch(p, text, ns); return { ok: true, m: ns };
+    },
+    async create(p, text) {
+      const r = await put(p, { message: 'Handy: neu ' + p, content: b64(text) });
+      if (r.status === 422 || r.status === 409) return { exists: true };
+      if (!r.ok) throw new Error('GitHub ' + r.status);
+      await touch(p, text, (await r.json()).content.sha); return { ok: true };
+    },
+    async search(q) {
+      await prefetch; q = q.toLowerCase(); const res = [];
+      for (const f of map.values()) {
+        const nameHit = f.p.toLowerCase().includes(q); let snip = '', hit = nameHit;
+        if (isMd(f.p)) {
+          const t = await idb.get('txt:' + f.sha);
+          if (t) { const i = t.toLowerCase().indexOf(q); if (i >= 0) { hit = true; snip = t.slice(Math.max(0, i - 40), i + 100).replace(/\n/g, ' '); } }
+        }
+        if (hit) res.push({ p: f.p, snip, name: nameHit });
+        if (res.length >= 60) break;
+      }
+      return res.sort((a, b) => b.name - a.name);
+    },
+    async img(p) { const f = map.get(p); return f ? URL.createObjectURL(await blobBin(f)) : null; },
+    async open(p) {
+      const f = map.get(p); if (!f) return; const w = window.open('', '_blank');
+      const u = URL.createObjectURL(await blobBin(f)); if (w) w.location = u; else location.href = u;
+    },
+    status: () => (offline ? 'Offline – Stand vom letzten Abgleich. ' : '') + `${cached}/${total} Notizen offline verfügbar`
+  };
+}
+const S = GH_MODE ? ghStore() : srvStore();
+
+async function loadFiles() {
+  files = await S.list();
+  byName = new Map();
+  for (const f of files) {
+    byName.set(base(f.p).toLowerCase(), f.p);
+    if (isMd(f.p)) byName.set(noext(f.p).toLowerCase(), f.p);
+  }
+}
+function resolve(name, from) {
+  name = name.split('#')[0].split('|')[0].trim();
+  if (!name) return from;
+  const k = name.toLowerCase();
+  return byName.get(k) || byName.get(base(k)) || byName.get(noext(k)) || null;
+}
+
+/* ---------- Markdown ---------- */
+function inline(s, from) {
+  const stash = [];
+  const keep = h => '\u0000' + (stash.push(h) - 1) + '\u0000';
+  s = s.replace(/`([^`]+)`/g, (_, c) => keep('<code>' + esc(c) + '</code>'));
+  s = esc(s);
+  s = s.replace(/!\[\[([^\]]+)\]\]/g, (_, n) => {
+    const t = n.split('|')[0], p = resolve(t, from);
+    if (p && isImg(p)) return keep(`<img data-raw="${esc(p)}" alt="${esc(t)}">`);
+    if (p && /\.pdf$/i.test(p)) return keep(`<a class="wl" data-open="${esc(p)}">📄 ${esc(base(p))}</a>`);
+    if (p && isMd(p)) return keep(`<a class="wl" data-p="${esc(p)}">↪ ${esc(noext(p))}</a>`);
+    if (p) return keep(`<a class="wl" data-open="${esc(p)}">${esc(base(p))}</a>`);
+    return keep(`<span class="wl missing">${esc(t)}</span>`);
+  });
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, a, u) => {
+    if (/^https?:/.test(u)) return keep(`<img src="${esc(u)}" alt="${a}" loading="lazy">`);
+    const p = resolve(decodeURIComponent(u), from) || u;
+    return keep(`<img data-raw="${esc(p)}" alt="${a}">`);
+  });
+  s = s.replace(/\[\[([^\]]+)\]\]/g, (_, n) => {
+    const [t, alias] = n.split('|'), p = resolve(t, from);
+    const label = esc(alias || t);
+    return keep(p ? `<a class="wl" data-p="${esc(p)}" data-h="${esc(t.split('#')[1] || '')}">${label}</a>` : `<a class="wl missing">${label}</a>`);
+  });
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, t, u) => {
+    if (/^(https?:|mailto:)/.test(u)) return keep(`<a href="${u}" target="_blank" rel="noopener">${t}</a>`);
+    const p = resolve(decodeURIComponent(u), from);
+    return keep(p ? `<a class="wl" data-p="${esc(p)}">${t}</a>` : t);
+  });
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<b><i>$1</i></b>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+       .replace(/(^|[\s(])_(.+?)_(?=[\s).,;:!?]|$)/g, '$1<i>$2</i>').replace(/\*(.+?)\*/g, '<i>$1</i>')
+       .replace(/~~(.+?)~~/g, '<s>$1</s>').replace(/==(.+?)==/g, '<mark>$1</mark>')
+       .replace(/(^|\s)#([\p{L}\d_\/-]+)/gu, '$1<span class="tag">#$2</span>');
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => stash[+i]);
+}
+
+function render(text, from) {
+  const L = text.split('\n');
+  let i = 0, out = '';
+  if (L[0] && L[0].trim() === '---') {
+    let j = 1; while (j < L.length && L[j].trim() !== '---') j++;
+    if (j < L.length) { out += '<div class="fm">' + esc(L.slice(1, j).join('\n')).replace(/\n/g, '<br>') + '</div>'; i = j + 1; }
+  }
+  const listRe = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+  while (i < L.length) {
+    const ln = L[i];
+    if (/^\s*$/.test(ln)) { i++; continue; }
+    let m;
+    if ((m = ln.match(/^(```|~~~)\s*(\S*)/))) {
+      const buf = []; i++;
+      while (i < L.length && !L[i].startsWith(m[1])) buf.push(L[i++]);
+      i++; out += '<pre><code>' + esc(buf.join('\n')) + '</code></pre>'; continue;
+    }
+    if ((m = ln.match(/^(#{1,6})\s+(.*?)\s*#*$/))) { out += `<h${m[1].length} id="h-${esc(m[2].toLowerCase())}">${inline(m[2], from)}</h${m[1].length}>`; i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(ln)) { out += '<hr>'; i++; continue; }
+    if (/^>/.test(ln)) {
+      const buf = [];
+      while (i < L.length && /^>/.test(L[i])) buf.push(L[i++].replace(/^>\s?/, ''));
+      const c = buf[0].match(/^\[!(\w+)\][+-]?\s*(.*)$/);
+      out += c ? `<div class="callout"><b>${esc(c[2] || c[1])}</b>${render(buf.slice(1).join('\n'), from)}</div>`
+               : `<blockquote>${render(buf.join('\n'), from)}</blockquote>`;
+      continue;
+    }
+    if (/^\|.*\|\s*$/.test(ln) && i + 1 < L.length && /^\|?\s*:?-{2,}/.test(L[i + 1])) {
+      const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      const head = cells(ln); i += 2; let rows = '';
+      while (i < L.length && /^\|.*\|\s*$/.test(L[i])) rows += '<tr>' + cells(L[i++]).map(c => `<td>${inline(c, from)}</td>`).join('') + '</tr>';
+      out += '<table><tr>' + head.map(c => `<th>${inline(c, from)}</th>`).join('') + '</tr>' + rows + '</table>'; continue;
+    }
+    if (listRe.test(ln)) {
+      // verschachtelte Listen über Einrückung
+      const stack = []; // {indent, tag}
+      while (i < L.length && (m = L[i].match(listRe))) {
+        const ind = m[1].replace(/\t/g, '    ').length, tag = /\d/.test(m[2]) ? 'ol' : 'ul';
+        while (stack.length && ind < stack[stack.length - 1].ind) { out += '</li></' + stack.pop().tag + '>'; }
+        if (stack.length && ind === stack[stack.length - 1].ind) out += '</li>';
+        else if (!stack.length || ind > stack[stack.length - 1].ind) { out += '<' + tag + '>'; stack.push({ ind, tag }); }
+        const t = m[3].match(/^\[( |x|X)\]\s+(.*)$/);
+        if (t) {
+          const done = t[1] !== ' ';
+          out += `<li class="task${done ? ' done' : ''}"><input type="checkbox" data-line="${i}"${done ? ' checked' : ''}><span>${inline(t[2], from)}</span>`;
+        } else out += '<li>' + inline(m[3], from);
+        i++;
+      }
+      while (stack.length) out += '</li></' + stack.pop().tag + '>';
+      continue;
+    }
+    const buf = [];
+    while (i < L.length && !/^\s*$/.test(L[i]) && !/^(#{1,6}\s|>|```|~~~)/.test(L[i]) && !listRe.test(L[i])) buf.push(L[i++]);
+    out += '<p>' + inline(buf.join('\n'), from).replace(/\n/g, '<br>') + '</p>';
+  }
+  return out;
+}
+
+/* ---------- Views ---------- */
+function setHeader(title, o) {
+  titleEl.textContent = title;
+  $('#back').hidden = !o.back; $('#edit').hidden = !o.edit; $('#save').hidden = !o.save;
+  $('#fab').hidden = !!o.back;
+}
+
+function tree() {
+  const root = {};
+  for (const f of files) {
+    if (!isMd(f.p)) continue;
+    const parts = f.p.split('/'); let n = root;
+    for (const d of parts.slice(0, -1)) n = (n[d + '/'] ||= {});
+    n[parts[parts.length - 1]] = f.p;
+  }
+  const walk = (n, path) => Object.keys(n).sort((a, b) => (b.endsWith('/') - a.endsWith('/')) || a.localeCompare(b, 'de')).map(k => {
+    if (k.endsWith('/')) {
+      const id = path + k, o = open_.has(id);
+      return `<div class="folder" data-f="${esc(id)}">${o ? '▾' : '▸'} ${esc(k.slice(0, -1))}</div>` + (o ? `<div class="sub">${walk(n[k], id)}</div>` : '');
+    }
+    return `<button class="row" data-p="${esc(n[k])}">${esc(k.replace(/\.md$/, ''))}</button>`;
+  }).join('');
+  return walk(root, '');
+}
+
+function home() {
+  cur = null; editing = false; dirty = false; history.replaceState(null, '', '#');
+  setHeader('Vault', {});
+  const recent = files.filter(f => isMd(f.p) && f.m).sort((a, b) => b.m - a.m).slice(0, 8);
+  main.innerHTML = `<input type="search" id="q" placeholder="Suchen…" autocomplete="off">
+    <div id="res"></div><div id="browse">
+    ${recent.length ? '<div class="folder" style="cursor:default">Zuletzt geändert</div>' : ''}
+    ${recent.map(f => `<button class="row" data-p="${esc(f.p)}">${esc(noext(f.p))}<small>${esc(dirOf(f.p))}</small></button>`).join('')}
+    <div class="folder" style="cursor:default;margin-top:10px">Ordner</div>${tree()}
+    ${GH_MODE ? `<p class="crumb" style="margin-top:20px">${esc(S.status())}<br><a href="#" id="disc">GitHub-Verbindung ändern</a></p>` : ''}</div>`;
+  let t;
+  $('#q').addEventListener('input', e => {
+    clearTimeout(t); const v = e.target.value.trim();
+    if (!v) { $('#res').innerHTML = ''; $('#browse').hidden = false; return; }
+    t = setTimeout(async () => {
+      const r = await S.search(v);
+      $('#browse').hidden = true;
+      $('#res').innerHTML = r.length ? r.map(x => `<button class="row" data-p="${esc(x.p)}">${esc(noext(x.p))}<small>${esc(x.snip || x.p)}</small></button>`).join('') : '<div class="empty">Nichts gefunden</div>';
+    }, 250);
+  });
+}
+
+async function openNote(p, hash) {
+  if (!isMd(p)) { S.open(p); return; }
+  if (dirty && !confirm('Ungespeicherte Änderungen verwerfen?')) return;
+  let d;
+  try { d = await S.read(p); } catch (e) { alert('Konnte Notiz nicht laden: ' + e.message + (GH_MODE ? '\n(Offline und noch nicht abgeglichen?)' : '')); return; }
+  cur = p; curText = d.text; curM = d.m; editing = false; dirty = false;
+  history.pushState({ p }, '', '#' + encodeURIComponent(p));
+  show(hash);
+}
+
+function show(hash) {
+  setHeader(noext(cur), { back: true, edit: true });
+  $('#edit').textContent = '✎';
+  main.innerHTML = `<div class="crumb">${esc(dirOf(cur))}</div><div class="md">${render(curText, cur)}</div>`;
+  main.querySelectorAll('img[data-raw]').forEach(async i => { try { const u = await S.img(i.dataset.raw); if (u) i.src = u; } catch {} });
+  if (hash) { const el = document.getElementById('h-' + hash.toLowerCase()); if (el) el.scrollIntoView(); } else scrollTo(0, 0);
+}
+
+function startEdit() {
+  editing = true; setHeader(noext(cur), { back: true, edit: true, save: true });
+  $('#edit').textContent = '👁';
+  main.innerHTML = '<textarea id="ta" spellcheck="false"></textarea>';
+  const ta = $('#ta'); ta.value = curText;
+  ta.addEventListener('input', () => { dirty = ta.value !== curText; });
+  ta.focus();
+}
+
+async function save() {
+  const ta = $('#ta'); if (!ta) return;
+  const text = ta.value; let d;
+  try {
+    d = await S.write(cur, text, curM);
+    if (d.conflict) {
+      if (!confirm('Die Notiz wurde inzwischen woanders geändert (PC oder anderes Gerät). Trotzdem überschreiben?')) return;
+      d = await S.write(cur, text, null);
+      if (d.conflict) { alert('Überschreiben fehlgeschlagen. Bitte neu laden und erneut versuchen.'); return; }
+    }
+  } catch (e) { alert('Speichern fehlgeschlagen: ' + e.message + '\nDein Text bleibt im Editor.'); return; }
+  curText = text; curM = d.m; dirty = false; editing = false; await loadFiles(); show();
+}
+
+async function toggleTask(line, checked) {
+  const L = curText.split('\n');
+  L[line] = L[line].replace(/\[( |x|X)\]/, checked ? '[x]' : '[ ]');
+  const text = L.join('\n');
+  try {
+    const d = await S.write(cur, text, curM);
+    if (d.conflict) { alert('Konflikt – Notiz wird neu geladen.'); await loadFiles(); openNote(cur); return; }
+    curText = text; curM = d.m; show();
+  } catch (e) { alert('Speichern fehlgeschlagen: ' + e.message); }
+}
+
+async function newNote() {
+  const name = prompt('Name der neuen Notiz (optional mit Ordner, z. B. "00 Inbox/Idee"):');
+  if (!name) return;
+  let p = name.trim().replace(/^\/+/, ''); if (!/\.md$/i.test(p)) p += '.md';
+  if (!p.includes('/')) p = '00 Inbox/' + p;
+  try {
+    const d = await S.create(p, '');
+    if (d.exists) { alert('Gibt es schon.'); return; }
+    await loadFiles(); await openNote(p); startEdit();
+  } catch (e) { alert('Fehler beim Erstellen: ' + e.message); }
+}
+
+function setup(msg) {
+  setHeader('Mit GitHub verbinden', {}); $('#fab').hidden = true;
+  const c = JSON.parse(localStorage.getItem('gh') || '{}');
+  main.innerHTML = `<p>Deine Notizen liegen in einem <b>privaten</b> GitHub-Repo. Trage Repo und Token ein (einmalig; der Token bleibt nur auf diesem Gerät).</p>
+    <p><input class="t" id="g-o" placeholder="GitHub-Benutzername" value="${esc(c.o || '')}" autocapitalize="off" autocorrect="off"></p>
+    <p><input class="t" id="g-r" placeholder="Repo-Name" value="${esc(c.r || 'obsidian-vault')}" autocapitalize="off" autocorrect="off"></p>
+    <p><input class="t" id="g-t" type="password" placeholder="Token (github_pat_…)" autocapitalize="off" autocorrect="off"></p>
+    <p><button class="pri" id="g-go">Verbinden</button></p><p id="g-msg" style="color:#dc2626">${esc(msg || '')}</p>`;
+  $('#g-go').onclick = async () => {
+    const cfg = { o: $('#g-o').value.trim(), r: $('#g-r').value.trim(), t: $('#g-t').value.trim() };
+    if (!cfg.o || !cfg.r || !cfg.t) { $('#g-msg').textContent = 'Bitte alle drei Felder ausfüllen.'; return; }
+    $('#g-msg').textContent = 'Prüfe…';
+    try { await S.check(cfg); S.setConfig(cfg); boot(); } catch (e) { $('#g-msg').textContent = e.message; }
+  };
+}
+
+async function boot() {
+  if (!S.configured()) return setup();
+  try { await loadFiles(); }
+  catch (e) {
+    if (e.message === 'auth') return setup('Zugriff abgelehnt – Token abgelaufen oder ohne Rechte? (' + (e.status || '') + ')');
+    main.innerHTML = '<div class="empty">Keine Verbindung und noch nichts zwischengespeichert.</div>'; throw e;
+  }
+  const h = decodeURIComponent(location.hash.slice(1));
+  h ? openNote(h) : home();
+}
+
+/* ---------- Events ---------- */
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t.matches('input[type=checkbox][data-line]')) { e.preventDefault(); toggleTask(+t.dataset.line, !t.checked); return; }
+  const f = t.closest('[data-f]');
+  if (f) { const id = f.dataset.f; open_.has(id) ? open_.delete(id) : open_.add(id); sessionStorage.setItem('open', JSON.stringify([...open_])); home(); return; }
+  if (t.id === 'disc') { e.preventDefault(); if (confirm('Verbindung zu GitHub trennen? Zwischengespeicherte Notizen bleiben erhalten.')) { S.clear(); setup(); } return; }
+  const o = t.closest('[data-open]');
+  if (o) { e.preventDefault(); S.open(o.dataset.open); return; }
+  const a = t.closest('[data-p]');
+  if (a) { e.preventDefault(); openNote(a.dataset.p, a.dataset.h); }
+});
+$('#back').onclick = () => { if (dirty && !confirm('Ungespeicherte Änderungen verwerfen?')) return; dirty = false; history.length > 1 && cur ? history.back() : home(); };
+$('#edit').onclick = () => { if (editing) { if (dirty && !confirm('Verwerfen?')) return; dirty = false; editing = false; show(); } else startEdit(); };
+$('#save').onclick = save;
+$('#fab').onclick = newNote;
+$('#refresh').onclick = async () => { try { await loadFiles(); } catch (e) { alert('Aktualisieren fehlgeschlagen.'); return; } cur ? openNote(cur) : home(); };
+window.addEventListener('popstate', () => {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h) { dirty = false; openNote(h); } else { dirty = false; home(); }
+});
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+(async () => {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  boot();
+})();
+</script>
+</body>
+</html>
